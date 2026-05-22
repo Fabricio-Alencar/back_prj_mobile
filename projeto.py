@@ -1,7 +1,7 @@
 import asyncio
 import json
 import ssl
-import os  # ADICIONADO: Para ler as portas da Azure
+import os
 import certifi
 import uuid
 from datetime import datetime
@@ -9,6 +9,7 @@ from typing import List
 
 import paho.mqtt.client as mqtt
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi.middleware.cors import CORSMiddleware  # CORREÇÃO: Importado para resolver o erro do FlutLab
 from pydantic import BaseModel, Field
 from contextlib import asynccontextmanager
 
@@ -115,11 +116,20 @@ async def lifespan(app: FastAPI):
         mqtt_client.connect_async(BROKER, PORT_MQTT, keepalive=60)
         mqtt_client.loop_start()
     except Exception as e:
-        print(f"❌ [SISTEMA] Erro: {e}")
+        print(f"❌ [SISTEMA] Erro MQTT ao iniciar: {e}")
     yield
     mqtt_client.loop_stop()
 
 app = FastAPI(lifespan=lifespan)
+
+# CORREÇÃO CRÍTICA: Configuração do Middleware de CORS para liberar o FlutLab
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Permite requisições originadas de qualquer site externo
+    allow_credentials=True,
+    allow_methods=["*"],  # Permite POST, GET, OPTIONS, PUT, DELETE
+    allow_headers=["*"],  # Permite cabeçalhos customizados ou Content-Type
+)
 
 # ========================================================
 # 7. ENDPOINT DE FUNCIONAMENTO (HEALTH CHECK PARA AZURE)
@@ -127,7 +137,7 @@ app = FastAPI(lifespan=lifespan)
 @app.get("/")
 @app.get("/health")
 def health_check():
-    """Endpoint para a Azure monitorar a saúde do contêiner"""
+    """Endpoint para a Azure monitorar se a aplicação está online"""
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
@@ -198,9 +208,5 @@ async def websocket_endpoint(websocket: WebSocket):
 # ========================================================
 if __name__ == "__main__":
     import uvicorn
-    # A Azure injeta uma porta aleatória via variável de ambiente 'PORT'. 
-    # Se não encontrar (rodando local), ele usa a porta padrão 8000.
     porta = int(os.environ.get("PORT", 8000))
-    
-    # Roda o servidor vinculando ao host '0.0.0.0' para aceitar conexões externas
     uvicorn.run("projeto:app", host="0.0.0.0", port=porta, reload=False)
