@@ -1,6 +1,7 @@
 import asyncio
 import json
 import ssl
+import os  # ADICIONADO: Para ler as portas da Azure
 import certifi
 import uuid
 from datetime import datetime
@@ -15,20 +16,15 @@ from contextlib import asynccontextmanager
 # 1. CONFIGURAÇÕES DO HIVEMQ CLOUD
 # ========================================================
 BROKER = "a5f04373bf154790992b6c1e37072d49.s1.eu.hivemq.cloud"
-PORT = 8884
+PORT_MQTT = 8884
 USER = "teste"
 PASSWORD = "Teste12345"
 
-# Tópicos de Leitura (ESP32 -> Python)
 TOPIC_TEMP = "iot/projeto/temperatura"
 TOPIC_HUM_SOLO = "iot/projeto/umidade_solo"
 TOPIC_HUM_AR = "iot/projeto/umidade_ar"
-
-# MODIFICADO: Dois tópicos separados de controle (Python -> ESP32)
 TOPIC_MANUAL = "iot/projeto/controle/manual"
 TOPIC_AUTOMATICO = "iot/projeto/controle/automatico"
-
-# Configurações de Limites
 TOPIC_UMIDADE_MIN = "iot/projeto/config/umidade_min"
 TOPIC_UMIDADE_MAX = "iot/projeto/config/umidade_max"
 
@@ -36,7 +32,7 @@ TOPIC_UMIDADE_MAX = "iot/projeto/config/umidade_max"
 # 2. SCHEMAS DE VALIDAÇÃO (PYDANTIC)
 # ========================================================
 class ModoControleRequest(BaseModel):
-    automatico: bool  # True = Ativa Automático/Desativa Manual | False = Ativa Manual/Desativa Automático
+    automatico: bool
 
 class LimitesUmidadeRequest(BaseModel):
     minima: float = Field(..., ge=0.0, le=100.0)
@@ -116,7 +112,7 @@ async def lifespan(app: FastAPI):
     global event_loop
     event_loop = asyncio.get_running_loop()
     try:
-        mqtt_client.connect_async(BROKER, PORT, keepalive=60)
+        mqtt_client.connect_async(BROKER, PORT_MQTT, keepalive=60)
         mqtt_client.loop_start()
     except Exception as e:
         print(f"❌ [SISTEMA] Erro: {e}")
@@ -126,26 +122,32 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 # ========================================================
-# 7. ROTAS DE API MODIFICADAS (USANDO OS DOIS TÓPICOS)
+# 7. ENDPOINT DE FUNCIONAMENTO (HEALTH CHECK PARA AZURE)
 # ========================================================
+@app.get("/")
+@app.get("/health")
+def health_check():
+    """Endpoint para a Azure monitorar a saúde do contêiner"""
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "mqtt_conectado": mqtt_client.is_connected()
+    }
 
+# ========================================================
+# 8. ROTAS DE API EXISTENTES
+# ========================================================
 @app.post("/controle/modo")
 def alterar_modo_controle(dados: ModoControleRequest):
-    """Alterna os estados escrevendo nos dois tópicos simultaneamente"""
     global estado_sistema
     try:
         if dados.automatico:
-            # Ativa o automático e limpa/desativa o manual
             mqtt_client.publish(TOPIC_AUTOMATICO, "ativado", retain=True)
             mqtt_client.publish(TOPIC_MANUAL, "desativado", retain=True)
-            print("📤 [MQTT] Modo Automático: ATIVADO | Modo Manual: DESATIVADO")
         else:
-            # Ativa o manual e limpa/desativa o automático
             mqtt_client.publish(TOPIC_AUTOMATICO, "desativado", retain=True)
             mqtt_client.publish(TOPIC_MANUAL, "ativado", retain=True)
-            print("📤 [MQTT] Modo Automático: DESATIVADO | Modo Manual: ATIVADO")
         
-        # Atualiza a API
         estado_sistema["automatico"] = dados.automatico
         estado_sistema["ultima_atualizacao"] = datetime.now().strftime("%H:%M:%S")
         
@@ -154,8 +156,7 @@ def alterar_modo_controle(dados: ModoControleRequest):
             
         return {"status": "sucesso", "modo_automatico": dados.automatico}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro ao publicar nos tópicos: {e}")
-
+        raise HTTPException(status_code=500, detail=f"Erro ao publicar: {e}")
 
 @app.post("/controle/limites")
 def alterar_limites_umidade(dados: LimitesUmidadeRequest):
@@ -191,3 +192,15 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.receive_text()
     except WebSocketDisconnect:
         clientes_websocket.remove(websocket)
+
+# ========================================================
+# 9. INICIALIZAÇÃO DINÂMICA (ESSENCIAL PARA AZURE)
+# ========================================================
+if __name__ == "__main__":
+    import uvicorn
+    # A Azure injeta uma porta aleatória via variável de ambiente 'PORT'. 
+    # Se não encontrar (rodando local), ele usa a porta padrão 8000.
+    porta = int(os.environ.get("PORT", 8000))
+    
+    # Roda o servidor vinculando ao host '0.0.0.0' para aceitar conexões externas
+    uvicorn.run("projeto:app", host="0.0.0.0", port=porta, reload=False)
