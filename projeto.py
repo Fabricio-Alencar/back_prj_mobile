@@ -5,22 +5,21 @@ import os
 import certifi
 import uuid
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 
 import paho.mqtt.client as mqtt
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
-from fastapi.middleware.cors import CORSMiddleware  # CORREÇÃO: Importado para resolver o erro do FlutLab
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from contextlib import asynccontextmanager
 
-# ========================================================
-# 1. CONFIGURAÇÕES DO HIVEMQ CLOUD
-# ========================================================
+# Configuracoes de conexao com o broker MQTT
 BROKER = "a5f04373bf154790992b6c1e37072d49.s1.eu.hivemq.cloud"
 PORT_MQTT = 8884
 USER = "teste"
 PASSWORD = "Teste12345"
 
+# Canais de comunicacao para envio e recebimento de dados
 TOPIC_TEMP = "iot/projeto/temperatura"
 TOPIC_HUM_SOLO = "iot/projeto/umidade_solo"
 TOPIC_HUM_AR = "iot/projeto/umidade_ar"
@@ -29,32 +28,32 @@ TOPIC_AUTOMATICO = "iot/projeto/controle/automatico"
 TOPIC_UMIDADE_MIN = "iot/projeto/config/umidade_min"
 TOPIC_UMIDADE_MAX = "iot/projeto/config/umidade_max"
 
-# ========================================================
-# 2. SCHEMAS DE VALIDAÇÃO (PYDANTIC)
-# ========================================================
-class ModoControleRequest(BaseModel):
-    automatico: bool
+# Classe de validacao para controle das funcoes do sistema
+class ControleRequest(BaseModel):
+    automatico: Optional[bool] = None
+    manual: Optional[bool] = None  # Alterado de irrigador_ligado para manual
 
+# Classe de validacao para limites de umidade do solo
 class LimitesUmidadeRequest(BaseModel):
     minima: float = Field(..., ge=0.0, le=100.0)
     maxima: float = Field(..., ge=0.0, le=100.0)
 
-# ========================================================
-# 3. ESTADO DO SISTEMA E WEBSOCKETS
-# ========================================================
 event_loop = None
 clientes_websocket: List[WebSocket] = []
 
+# Dicionario global que representa a situacao atualizada do dispositivo
 estado_sistema = {
     "temperatura": 0.0,
     "umidade_ar": 0.0,
     "umidade_solo": 0.0,
     "automatico": True,       
+    "manual": False,  # Alterado de irrigador_ligado para manual
     "umidade_minima": 30.0,    
     "umidade_maxima": 70.0,    
     "ultima_atualizacao": "Aguardando dados..."
 }
 
+# Transmite os dados atuais para todos os clientes conectados via WebSocket
 async def notificar_celulares():
     if clientes_websocket:
         for ws in clientes_websocket[:]:
@@ -63,17 +62,14 @@ async def notificar_celulares():
             except Exception:
                 clientes_websocket.remove(ws)
 
-# ========================================================
-# 4. CALLBACKS MQTT
-# ========================================================
+# Evento executado ao firmar conexao com o servidor MQTT
 def on_connect(client, userdata, flags, rc):
     if rc == 0:
-        print("✅ [MQTT] Conectado com sucesso via WebSockets!")
+        print("Conectado ao broker MQTT com sucesso")
         subs = [(TOPIC_TEMP, 0), (TOPIC_HUM_SOLO, 0), (TOPIC_HUM_AR, 0)]
         client.subscribe(subs)
-    else:
-        print(f"❌ [MQTT] Erro na conexão. Código: {rc}")
 
+# Evento disparado quando novas mensagens de sensores chegam via MQTT
 def on_message(client, userdata, msg):
     global estado_sistema
     try:
@@ -92,11 +88,9 @@ def on_message(client, userdata, msg):
         if event_loop:
             asyncio.run_coroutine_threadsafe(notificar_celulares(), event_loop)
     except Exception as e:
-        print(f"❌ [ERRO] Falha ao processar mensagem: {e}")
+        print(f"Falha ao processar mensagem do sensor: {e}")
 
-# ========================================================
-# 5. CONFIGURAÇÃO DO CLIENTE MQTT
-# ========================================================
+# Instancia e define as configuracoes de seguranca do cliente MQTT
 CLIENT_ID = f"FastAPI_WS_{uuid.uuid4().hex[:6]}"
 mqtt_client = mqtt.Client(client_id=CLIENT_ID, transport="websockets")
 mqtt_client.username_pw_set(USER, PASSWORD)
@@ -105,9 +99,7 @@ mqtt_client.tls_set(ca_certs=certifi.where(), cert_reqs=ssl.CERT_REQUIRED)
 mqtt_client.on_connect = on_connect
 mqtt_client.on_message = on_message
 
-# ========================================================
-# 6. FASTAPI E LIFESPAN
-# ========================================================
+# Escopo de execucao que acompanha o tempo de atividade do servidor principal
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global event_loop
@@ -116,63 +108,57 @@ async def lifespan(app: FastAPI):
         mqtt_client.connect_async(BROKER, PORT_MQTT, keepalive=60)
         mqtt_client.loop_start()
     except Exception as e:
-        print(f"❌ [SISTEMA] Erro MQTT ao iniciar: {e}")
+        print(f"Erro ao iniciar o cliente MQTT: {e}")
     yield
     mqtt_client.loop_stop()
 
 app = FastAPI(lifespan=lifespan)
 
-# CORREÇÃO CRÍTICA: Configuração do Middleware de CORS para liberar o FlutLab
+# Middleware para contornar restricoes de acesso de segurança do navegador no FlutLab
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Permite requisições originadas de qualquer site externo
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  # Permite POST, GET, OPTIONS, PUT, DELETE
-    allow_headers=["*"],  # Permite cabeçalhos customizados ou Content-Type
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# ========================================================
-# 7. ENDPOINT DE FUNCIONAMENTO (HEALTH CHECK PARA AZURE)
-# ========================================================
+# Rotas obrigatorias de monitoramento da Azure
 @app.get("/")
 @app.get("/health")
 def health_check():
-    """Endpoint para a Azure monitorar se a aplicação está online"""
-    return {
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "mqtt_conectado": mqtt_client.is_connected()
-    }
+    return {"status": "healthy", "mqtt_conectado": mqtt_client.is_connected()}
 
-# ========================================================
-# 8. ROTAS DE API EXISTENTES
-# ========================================================
+# Rota para atualizacoes de controle independentes
 @app.post("/controle/modo")
-def alterar_modo_controle(dados: ModoControleRequest):
+def alterar_modo_controle(dados: ControleRequest):
     global estado_sistema
     try:
-        if dados.automatico:
-            mqtt_client.publish(TOPIC_AUTOMATICO, "ativado", retain=True)
-            mqtt_client.publish(TOPIC_MANUAL, "desativado", retain=True)
-        else:
-            mqtt_client.publish(TOPIC_AUTOMATICO, "desativado", retain=True)
-            mqtt_client.publish(TOPIC_MANUAL, "ativado", retain=True)
+        # Verifica se houve comando para alterar o estado da automacao
+        if dados.automatico is not None:
+            estado_sistema["automatico"] = dados.automatico
+            msg = "ativado" if dados.automatico else "desativado"
+            mqtt_client.publish(TOPIC_AUTOMATICO, msg, retain=True)
+            
+        # Verifica se houve comando para alterar o estado da bomba manual
+        if dados.manual is not None:
+            estado_sistema["manual"] = dados.manual
+            msg = "ativado" if dados.manual else "desativado"
+            mqtt_client.publish(TOPIC_MANUAL, msg, retain=True)
         
-        estado_sistema["automatico"] = dados.automatico
         estado_sistema["ultima_atualizacao"] = datetime.now().strftime("%H:%M:%S")
         
         if event_loop:
             asyncio.run_coroutine_threadsafe(notificar_celulares(), event_loop)
             
-        return {"status": "sucesso", "modo_automatico": dados.automatico}
+        return estado_sistema
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro ao publicar: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro ao publicar comando: {e}")
 
+# Rota para gravacao das metas de umidade do solo
 @app.post("/controle/limites")
 def alterar_limites_umidade(dados: LimitesUmidadeRequest):
     global estado_sistema
-    if dados.minima >= dados.maxima:
-        raise HTTPException(status_code=400, detail="A umidade mínima não pode ser maior ou igual à máxima.")
     try:
         mqtt_client.publish(TOPIC_UMIDADE_MIN, str(dados.minima), retain=True)
         mqtt_client.publish(TOPIC_UMIDADE_MAX, str(dados.maxima), retain=True)
@@ -183,15 +169,16 @@ def alterar_limites_umidade(dados: LimitesUmidadeRequest):
         
         if event_loop:
             asyncio.run_coroutine_threadsafe(notificar_celulares(), event_loop)
-            
-        return {"status": "sucesso", "umidade_minima": dados.minima, "umidade_maxima": dados.maxima}
+        return {"status": "sucesso"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro ao publicar limites: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro ao salvar limites: {e}")
 
+# Retorna a leitura de dados estatica em formato JSON
 @app.get("/status")
 def status():
     return estado_sistema
 
+# Ponto de entrada para comunicacao persistente via WebSocket
 @app.websocket("/ws/sensores")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
@@ -203,9 +190,7 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         clientes_websocket.remove(websocket)
 
-# ========================================================
-# 9. INICIALIZAÇÃO DINÂMICA (ESSENCIAL PARA AZURE)
-# ========================================================
+# Inicializacao com tratamento para vinculacao da porta dinamica da Azure
 if __name__ == "__main__":
     import uvicorn
     porta = int(os.environ.get("PORT", 8000))
