@@ -46,8 +46,8 @@ estado_sistema = {
     "temperatura": 0.0,
     "umidade_ar": 0.0,
     "umidade_solo": 0.0,
-    "automatico": True,       
-    "manual": False,  # Alterado de irrigador_ligado para manual
+    "automatico": False,       
+    "manual": False,  
     "umidade_minima": 30.0,    
     "umidade_maxima": 70.0,    
     "ultima_atualizacao": "Aguardando dados..."
