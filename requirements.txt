@@ -1,0 +1,5 @@
+fastapi>=0.110.0
+uvicorn>=0.28.0
+paho-mqtt>=1.6.1,<2.0.0
+certifi>=2024.2.2
+websockets>=12.0
