@@ -84,7 +84,7 @@ def on_message(client, userdata, msg):
         elif msg.topic == TOPIC_HUM_AR:
             estado_sistema["umidade_ar"] = valor
         
-        estado_sistema["ultima_atualizacao"] = datetime.now().strftime("%H:%M:%S")
+        estado_sistema["ultima_atualizacao"] = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y %H:%M:%S")
 
         if event_loop:
             asyncio.run_coroutine_threadsafe(notificar_celulares(), event_loop)
@@ -166,7 +166,7 @@ def alterar_limites_umidade(dados: LimitesUmidadeRequest):
         
         estado_sistema["umidade_minima"] = dados.minima
         estado_sistema["umidade_maxima"] = dados.maxima
-        estado_sistema["ultima_atualizacao"] = datetime.now().strftime("%H:%M:%S")
+        estado_sistema["ultima_atualizacao"] = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y %H:%M:%S")
         
         if event_loop:
             asyncio.run_coroutine_threadsafe(notificar_celulares(), event_loop)
