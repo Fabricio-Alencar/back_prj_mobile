@@ -6,6 +6,7 @@ import certifi
 import uuid
 from datetime import datetime
 from typing import List, Optional
+from zoneinfo import ZoneInfo
 
 import paho.mqtt.client as mqtt
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
@@ -146,7 +147,7 @@ def alterar_modo_controle(dados: ControleRequest):
             msg = "ativado" if dados.manual else "desativado"
             mqtt_client.publish(TOPIC_MANUAL, msg, retain=True)
         
-        estado_sistema["ultima_atualizacao"] = datetime.now().strftime("%H:%M:%S")
+        estado_sistema["ultima_atualizacao"] = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y %H:%M:%S")
         
         if event_loop:
             asyncio.run_coroutine_threadsafe(notificar_celulares(), event_loop)
